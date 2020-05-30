@@ -25,13 +25,12 @@ or otherwise, one may specify a prefix directory using the ":code:`--prefix`" op
 The default behavior of :code:`scr_index` is to list the contents of the index file, e.g.::
 
   >>: scr_index
-     DSET VALID FLUSHED             NAME
-  *    18 YES   2014-01-14T11:26:06 ckpt.18
-       12 YES   2014-01-14T10:28:23 ckpt.12
-        6 YES   2014-01-14T09:27:15 ckpt.6
+  CUR  VALID FLUSHED             NAME
+    *  YES   2014-01-14T11:26:06 ckpt.18
+       YES   2014-01-14T10:28:23 ckpt.12
+       YES   2014-01-14T09:27:15 ckpt.6
 
-When listing datasets, the internal SCR dataset id is shown,
-followed by a field indicating whether the dataset is valid,
+When listing datasets, :code:`scr_index` lists a field indicating whether the dataset is valid,
 the time it was flushed to the parallel file system,
 and finally the dataset name.
 
@@ -42,6 +41,25 @@ One can change the current checkpoint using the :code:`--current` option,
 providing the dataset name as an argument.::
 
   scr_index --current ckpt.12
+
+If no dataset is marked as current,
+SCR starts with most recent checkpoint that is valid.
+
+One may remove entries from the index file using the ":code:`--remove`" option.
+This operation does not delete the corresponding dataset files.
+It only deletes the entry from the :code:`index.scr` file.::
+
+  scr_index --remove ckpt.50
+
+This is useful if one deletes a dataset from the parallel file system
+and then wishes to update the index.
+
+If an entry is removed inadvertently, one may add it back with::
+
+  scr_index --add ckpt.50
+
+This requires all SCR metadata files to exist in their associated :code:`scr.dataset` subdirectory
+within the hidden :code:`.scr` directory within the prefix directory.
 
 In most cases, the SCR library or the SCR commands add all necessary entries to the index file.
 However, there are cases where they may fail.
@@ -60,13 +78,5 @@ One must provide the SCR dataset id as an argument.
 To obtain the SCR dataset id value, lookup the trailing integer on the names of :code:`scr.dataset` subdirectories
 in the hidden :code:`.scr` directory within the prefix directory.::
 
-  scr_index --add 50
+  scr_index --build 50
 
-One may remove entries from the index file using the ":code:`--remove`" option.
-This operation does not delete the corresponding dataset files.
-It only deletes the entry from the :code:`index.scr` file.::
-
-  scr_index --remove ckpt.50
-
-This is useful if one deletes a dataset from the parallel file system
-and then wishes to update the index.

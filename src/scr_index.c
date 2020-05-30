@@ -1835,8 +1835,7 @@ int index_list(const spath* prefix)
   kvtree_sort_int(dset_hash, KVTREE_SORT_DESCENDING);
 
   /* print header */
-  //printf("   DSET VALID FLUSHED             NAME\n");
-  printf("  DSET VALID FLUSHED              NAME\n");
+  printf("CUR VALID FLUSHED             NAME\n");
 
   /* iterate over each of the datasets and print the id and other info */
   kvtree_elem* elem;
@@ -1889,10 +1888,6 @@ int index_list(const spath* prefix)
       printf(" ");
     }
 */
-
-    printf("%6d", dset);
-
-    printf(" ");
 
     /* to be valid, the dataset must be marked as vaild and it must
      * not have failed a fetch attempt */
@@ -2048,7 +2043,7 @@ cleanup:
  * attempt add the dataset to the index file.
  * Returns SCR_SUCCESS if dataset can be indexed,
  * either as complete or incomplete */
-int index_add(const spath* prefix, int id, int* complete_flag)
+int index_build(const spath* prefix, int id, int* complete_flag)
 {
   int rc = SCR_SUCCESS;
 
@@ -2122,6 +2117,93 @@ int index_add(const spath* prefix, int id, int* complete_flag)
   return rc;
 }
 
+/* add named dataset to index,
+ * requires summary file to already exist,
+ * scans scr.dataset.<id> directories looking
+ * for dataset with matching name */
+int index_add(const spath* prefix, const char* name)
+{
+  int rc = SCR_FAILURE;
+
+  /* path to hidden directory */
+  spath* hidden_path = spath_dup(prefix);
+  spath_append_str(hidden_path, ".scr");
+
+  /* read contents in hidden directory */
+  kvtree* list = kvtree_new();
+  scr_read_dir(hidden_path, list);
+
+  /* iterate over list of directories looking for
+   * one whose dataset name matches given name */
+  kvtree* dirs = kvtree_get(list, SCR_IO_KEY_DIR);
+  kvtree_elem* elem;
+  for (elem = kvtree_elem_first(dirs);
+       elem != NULL;
+       elem = kvtree_elem_next(elem))
+  {
+    /* check whether we have a dataset directory */
+    char* dirname = kvtree_elem_key(elem);
+    if (strncmp(dirname, "scr.dataset.", 12) == 0) {
+      /* got the name of a dataset directory, build path to it */
+      spath* dataset_path = spath_dup(hidden_path);
+      spath_append_str(dataset_path, dirname);
+
+      /* read summary file from the dataset directory */
+      kvtree* summary = kvtree_new();
+      if (scr_summary_read(dataset_path, summary) == SCR_SUCCESS) {
+        printf("%s\n", dirname);
+        kvtree_print(summary, 2);
+
+        /* get the dataset hash for this directory */
+        scr_dataset* dataset = kvtree_get(summary, SCR_SUMMARY_6_KEY_DATASET);
+        if (dataset != NULL) {
+          /* get the dataset name */
+          char* dataset_name;
+          if (scr_dataset_get_name(dataset, &dataset_name) == SCR_SUCCESS) {
+            if (strcmp(dataset_name, name) == 0) {
+              /* TODO: this might not be the only dataset by this name */
+
+              /* create a new hash to store our index file data */
+              kvtree* index = kvtree_new();
+
+              /* read index file from the prefix directory */
+              scr_index_read(prefix, index);
+
+              /* found the name, now check whether it's complete (assume that it's not) */
+              int id = 0;
+              scr_dataset_get_id(dataset, &id);
+
+              /* found the name, now check whether it's complete (assume that it's not) */
+              int complete = 0;
+              kvtree_util_get_int(summary, SCR_SUMMARY_6_KEY_COMPLETE, &complete);
+
+              /* write values to the index file */
+              scr_index_remove(index, dataset_name);
+              scr_index_set_dataset(index, id, dataset_name, dataset, complete);
+              scr_index_mark_flushed(index, id, dataset_name);
+              scr_index_write(prefix, index);
+
+              /* free our index hash */
+              kvtree_delete(&index);
+
+              rc = SCR_SUCCESS;
+            }
+          }
+        }
+      }
+      kvtree_delete(&summary);
+
+      spath_delete(&dataset_path);
+    }
+  }
+
+  kvtree_delete(&list);
+
+  spath_delete(&hidden_path);
+
+  return rc;
+}
+
 int print_usage()
 {
   printf("\n");
@@ -2130,6 +2212,7 @@ int print_usage()
   printf("  Options:\n");
   printf("    -l, --list           List indexed datasets (default behavior)\n");
   printf("    -a, --add=<id>       Add dataset <id> to index\n");
+  printf("    -A, --addname=<id>   Add dataset <name> to index (requires summary file to exist)\n");
   printf("    -r, --remove=<name>  Remove dataset <name> from index (does not delete files)\n");
   printf("    -c, --current=<name> Set <name> as current restart directory\n");
   printf("    -p, --prefix=<dir>   Specify prefix directory (defaults to current working directory)\n");
@@ -2143,6 +2226,7 @@ struct arglist {
   char* name;
   int id;
   int list;
+  int build;
   int add;
   int remove;
   int current;
@@ -2167,9 +2251,10 @@ int get_args(int argc, char **argv, struct arglist* args)
   args->remove  = 0;
   args->current = 0;
 
-  static const char *opt_string = "la:r:p:h";
+  static const char *opt_string = "lb:a:r:p:h";
   static struct option long_options[] = {
     {"list",    no_argument,       NULL, 'l'},
+    {"build",   required_argument, NULL, 'b'},
     {"add",     required_argument, NULL, 'a'},
     {"remove",  required_argument, NULL, 'r'},
     {"current", required_argument, NULL, 'c'},
@@ -2185,8 +2270,13 @@ int get_args(int argc, char **argv, struct arglist* args)
       case 'l':
         args->list = 1;
         break;
+      case 'b':
+        args->id    = atoi(optarg);
+        args->build = 1;
+        args->list  = 0;
+        break;
       case 'a':
-        args->id   = atoi(optarg);
+        args->name = strdup(optarg);
         args->add  = 1;
         args->list = 0;
         break;
@@ -2249,7 +2339,7 @@ int main(int argc, char *argv[])
   int id = args.id;
 
   /* these options all require a prefix directory */
-  if (args.add == 1 || args.remove == 1 || args.current == 1 || args.list == 1) {
+  if (args.build == 1 | args.add == 1 || args.remove == 1 || args.current == 1 || args.list == 1) {
     if (spath_is_null(prefix)) {
       print_usage();
       return 1;
@@ -2257,24 +2347,27 @@ int main(int argc, char *argv[])
   }
 
   /* these options all require a dataset name */
-  if (args.remove == 1 || args.current == 1) {
+  if (args.add == 1 || args.remove == 1 || args.current == 1) {
     if (name == NULL) {
       print_usage();
       return 1;
     }
   }
 
-  if (args.add == 1) {
+  if (args.build == 1) {
     /* add the dataset id to the index.scr file in the prefix directory,
-     * rebuild missing files if necessary */
+     * build missing files if necessary */
     rc = SCR_FAILURE;
     int complete = 0;
-    if (index_add(prefix, id, &complete) == SCR_SUCCESS) {
+    if (index_build(prefix, id, &complete) == SCR_SUCCESS) {
       if (complete == 1) {
         /* only return success if we find a value for complete, and if that value is 1 */
         rc = SCR_SUCCESS;
       }
     }
+  } else if (args.add == 1) {
+    /* add the named dataset to the index file (requires summary file to exist) */
+    rc = index_add(prefix, name);
   } else if (args.remove == 1) {
     /* remove the named dataset from the index file (does not delete files) */
     rc = index_remove(prefix, name);
