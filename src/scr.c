@@ -3307,11 +3307,11 @@ int SCR_Current(const char* name)
 
     /* get the dataset id for this dataset */
     int dset_id;
-    scr_dataset_get_id(dataset,   &scr_dataset_id);
+    scr_dataset_get_id(dataset, &dset_id);
 
     /* get the checkpoint id for this dataset */
     int ckpt_id;
-    scr_dataset_get_ckpt(dataset, &scr_checkpoint_id);
+    scr_dataset_get_ckpt(dataset, &ckpt_id);
 
     /* initialize internal scr counters to assume job restarted
      * from this dataset */
